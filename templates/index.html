@@ -13,6 +13,7 @@
 </head>
 <body>
   <header class="band">
+    {% include "_nav.html" %}
     <div class="band-inner">
       <div class="band-copy">
         <h1>Căn nhà của bạn đáng giá bao nhiêu?</h1>
@@ -92,7 +93,7 @@
     <section class="accuracy">
       <div>
         <h2>Mô hình này chính xác đến đâu?</h2>
-        <p class="lead">Mô hình {{ meta.model_name }} được kiểm tra trên {{ '{:,}'.format(meta.n_test).replace(',', '.') }} căn nhà mà nó chưa từng thấy khi học.</p>
+        <p class="lead">Mô hình {{ meta.model_name }} được kiểm tra trên {{ '{:,}'.format(meta.n_test).replace(',', '.') }} căn nhà mà nó chưa từng thấy khi học. Muốn biết nó học như thế nào thì xem <a href="{{ url_for('explain_page') }}">trang giải thích mô hình</a>.</p>
         <dl class="stats">
           <div class="stat"><dt>Sai số trung bình (MAE)</dt><dd>{{ meta.metrics.MAE | vn_num }} tỷ</dd></div>
           <div class="stat"><dt>Căn bậc hai sai số bình phương (RMSE)</dt><dd>{{ meta.metrics.RMSE | vn_num }} tỷ</dd></div>

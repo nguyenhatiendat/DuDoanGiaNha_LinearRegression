@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Giải thích mô hình</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/giai-thich.css') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='images/gach-bong.svg') }}">
+</head>
+<body>
+{% set tr = meta.metrics_train %}
+{% set te = meta.metrics %}
+{% set cv = meta.metrics_cv %}
+{% set ei = meta.error_info %}
+{% set exps = meta.experiments %}
+{% set removed = data.n_after_city - data.n_clean %}
+{% set dropped_city = data.n_raw - data.n_after_city %}
+{% set by_missing = columns | sort(attribute='missing_pct', reverse=true) %}
+
+  <header class="band band-doc">
+    {% include "_nav.html" %}
+    <div class="band-inner">
+      <div class="band-copy">
+        <h1>Mô hình dự đoán giá nhà học như thế nào?</h1>
+        <p class="lead">Đi từ dữ liệu thô đến giá dự đoán: dữ liệu có gì, xử lý ra sao, Linear Regression học gì và kết quả tốt đến đâu. Số liệu trên trang lấy từ lần huấn luyện gần nhất.</p>
+      </div>
+    </div>
+  </header>
+  <div class="tile-strip" aria-hidden="true"></div>
+
+  <div class="doc">
+    <aside class="toc">
+      <nav aria-label="Mục lục">
+        <p>Nội dung</p>
+        <ol>
+          <li><a href="#gioi-thieu">1. Bài toán</a></li>
+          <li><a href="#quy-trinh">2. Quy trình</a></li>
+          <li><a href="#du-lieu">3. Dữ liệu</a></li>
+          <li><a href="#tien-xu-ly">4. Tiền xử lý</a></li>
+          <li><a href="#linear-regression">5. Linear Regression</a></li>
+          {% if meta.demo %}<li><a href="#thu-tay">6. Thử tay</a></li>{% endif %}
+          <li><a href="#danh-gia">7. Đánh giá</a></li>
+          <li><a href="#phuong-an">8. Các phương án đã thử</a></li>
+          <li><a href="#ket-qua">9. Biểu đồ kết quả</a></li>
+          <li><a href="#han-che">10. Hạn chế</a></li>
+        </ol>
+      </nav>
+    </aside>
+
+    <article class="doc-body">
+
+      <!-- 1 -->
+      <section id="gioi-thieu">
+        <h2>1. Bài toán</h2>
+        <p>Cho thông tin của một căn nhà (ở đâu, rộng bao nhiêu, mấy tầng, mấy phòng...), hãy dự đoán giá bán. Mỗi căn trong dữ liệu đã có sẵn giá thật làm đáp án, nên đây là bài toán <b>học có giám sát</b>. Đầu ra là một con số (tỷ đồng) chứ không phải một nhóm, nên thuộc dạng <b>hồi quy</b>.</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <tbody>
+              <tr><th>Bài toán</th><td>Dự đoán giá nhà</td></tr>
+              <tr><th>Loại học máy</th><td>Học có giám sát (Supervised Learning)</td></tr>
+              <tr><th>Dạng bài toán</th><td>Hồi quy (Regression)</td></tr>
+              <tr><th>Thuật toán</th><td>Linear Regression</td></tr>
+              <tr><th>Dataset</th><td>Vietnam Housing Dataset 2024 (Kaggle)</td></tr>
+              <tr><th>Đầu vào</th><td>Các thông tin mô tả căn nhà</td></tr>
+              <tr><th>Đầu ra</th><td>Giá nhà (tỷ đồng)</td></tr>
+              <tr><th>Công cụ</th><td>Python, Scikit-learn, Pandas, Joblib, Flask</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Mục tiêu của bài là tìm ra mối quan hệ giữa thông tin căn nhà và giá, xây mô hình dự đoán giá cho căn mới, đo độ chính xác bằng MAE, MSE, RMSE, R², rồi đưa mô hình vào một trang web để thử.</p>
+      </section>
+
+      <!-- 2 -->
+      <section id="quy-trinh">
+        <h2>2. Quy trình tổng quan</h2>
+        <ol class="flow">
+          <li><b>Đọc dữ liệu</b><span>File <code>data/gia_nha.csv</code>, {{ data.n_raw | vn_int }} tin rao bán.</span></li>
+          <li><b>Làm sạch</b><span>Tách địa chỉ, chuẩn hóa tên tỉnh, bỏ giá trị ngoại lai.</span></li>
+          <li><b>Tạo đặc trưng</b><span>Thêm log(diện tích), khóa quận, khóa phường.</span></li>
+          <li><b>Chia dữ liệu</b><span>80% để học ({{ meta.n_train | vn_int }} căn), 20% để kiểm tra ({{ meta.n_test | vn_int }} căn).</span></li>
+          <li><b>Chuẩn bị đầu vào</b><span>Điền giá trị thiếu, mã hóa One-Hot cho cột chữ, chuẩn hóa cột số.</span></li>
+          <li><b>Huấn luyện</b><span>Linear Regression tìm các hệ số w từ tập train.</span></li>
+          <li><b>Đánh giá</b><span>MAE, MSE, RMSE, R² trên tập test, kèm cross-validation 5 lần.</span></li>
+          <li><b>Lưu và dùng</b><span>Lưu bằng Joblib, Flask nạp lên để dự đoán khi người dùng nhập thông tin.</span></li>
+        </ol>
+      </section>
+
+      <!-- 3 -->
+      <section id="du-lieu">
+        <h2>3. Dữ liệu</h2>
+        <p>Dữ liệu lấy từ Kaggle, gồm {{ data.n_raw | vn_int }} tin rao bán nhà ở Việt Nam năm 2024, mỗi tin có {{ columns | length }} cột. Cột <code>Price</code> là giá cần dự đoán, các cột còn lại là thông tin đầu vào.</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Cột</th><th>Ý nghĩa</th><th>Kiểu</th><th class="num">Thiếu</th></tr></thead>
+            <tbody>
+              {% for c in columns %}
+              <tr>
+                <td><code>{{ c.csv_name }}</code></td>
+                <td>{{ c.meaning }}</td>
+                <td>{{ c.kind }}</td>
+                <td class="num">{{ c.missing_pct | vn_num(1) }}%</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if by_missing | length >= 3 %}
+        <p>Dữ liệu thiếu khá nhiều: <code>{{ by_missing[0].csv_name }}</code> thiếu {{ by_missing[0].missing_pct | vn_num(0) }}%, <code>{{ by_missing[1].csv_name }}</code> thiếu {{ by_missing[1].missing_pct | vn_num(0) }}%, <code>{{ by_missing[2].csv_name }}</code> thiếu {{ by_missing[2].missing_pct | vn_num(0) }}%. Cách xử lý nằm ở phần sau.</p>
+        {% endif %}
+      </section>
+
+      <!-- 4 -->
+      <section id="tien-xu-ly">
+        <h2>4. Tiền xử lý</h2>
+
+        <h3>4.1 Tách và chuẩn hóa địa chỉ</h3>
+        <p>Vị trí ảnh hưởng đến giá nhiều nhất, nhưng trong dữ liệu nó nằm gộp trong một cột chữ. Mỗi địa chỉ có dạng <i>đường, phường/xã, quận/huyện, tỉnh/thành</i>, nên được tách thành ba cấp:</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Địa chỉ gốc</th><th>Phường/xã</th><th>Quận/huyện</th><th>Tỉnh/thành</th></tr></thead>
+            <tbody><tr><td>Đường Nguyễn Văn Khối, Phường 11, Gò Vấp, Hồ Chí Minh</td><td>Phường 11</td><td>Gò Vấp</td><td>Hồ Chí Minh</td></tr></tbody>
+          </table>
+        </div>
+        <p>Dữ liệu nhập tay nên tên không thống nhất: "HN" và "Hà Nội" là cùng một nơi, "Quận Long Biên" và "Long Biên" cũng vậy. Các tên này được đưa về một dạng. Tỉnh nào chỉ xuất hiện dưới 5 lần (phần lớn là nhập sai) thì bị bỏ, tổng cộng {{ dropped_city | vn_int }} dòng. Tên quận được ghép với tên tỉnh (ví dụ <code>Hà Nội|Cầu Giấy</code>) vì nhiều quận trùng tên giữa các tỉnh.</p>
+
+        <h3>4.2 Giá trị thiếu</h3>
+        <ul>
+          <li><b>Cột số</b> được điền bằng <b>trung vị</b> (median), vì trung vị ít bị kéo lệch bởi vài căn có số rất lớn. Ví dụ số tầng thiếu sẽ được điền {{ meta.scaler.floors.median | vn_num(0) }}.</li>
+          <li><b>Cột chữ</b> được điền bằng nhóm riêng tên "{{ meta.missing_label }}". Tin đăng không ghi hướng nhà hay nội thất thường là một loại tin khác với tin có ghi, nên việc không ghi cũng là thông tin.</li>
+        </ul>
+        <p>Các cột hướng thiếu rất nhiều nhưng không bị xóa. Ở phần 8 có thể thấy hai cột này gần như không làm mô hình tốt lên, nhưng giữ lại cũng không làm nó tệ đi.</p>
+
+        <h3>4.3 Giá trị ngoại lai</h3>
+        <p>Linear Regression tính sai số bằng bình phương, nên vài căn có giá hoặc diện tích quá lớn sẽ kéo cả đường dự đoán lệch về phía chúng. Vì vậy các dòng có giá hoặc diện tích nằm ngoài khoảng phân vị 1% đến 99% bị bỏ.</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Cột</th><th class="num">Giữ từ</th><th class="num">Đến</th></tr></thead>
+            <tbody>
+              <tr><td>Giá (tỷ đồng)</td><td class="num">{{ data.price_cut[0] | vn_num(2) }}</td><td class="num">{{ data.price_cut[1] | vn_num(2) }}</td></tr>
+              <tr><td>Diện tích (m²)</td><td class="num">{{ data.area_cut[0] | vn_num(0) }}</td><td class="num">{{ data.area_cut[1] | vn_num(0) }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>Cách này bỏ thêm {{ removed | vn_int }} dòng, còn lại <b>{{ data.n_clean | vn_int }}</b> dòng. Hệ quả: mô hình chỉ đáng tin với nhà có giá trong khoảng trên. Trang kết quả có cảnh báo khi giá dự đoán nằm ngoài khoảng này.</p>
+
+        <h3>4.4 Tạo thêm đặc trưng</h3>
+        <ul>
+          <li><b>log(diện tích)</b>: giá không tăng đều theo từng m². Nhà từ 30 lên 60 m² tăng giá nhiều hơn nhà từ 230 lên 260 m². Thêm cột log giúp đường thẳng khớp hơn với đường cong này.</li>
+          <li><b>Khóa quận</b> (<code>tỉnh|quận</code>) và <b>khóa phường</b> (<code>tỉnh|quận|phường</code>) như đã nói ở trên.</li>
+        </ul>
+
+        <h3>4.5 Mã hóa One-Hot</h3>
+        <p>Linear Regression chỉ tính được với số, còn "Gò Vấp" là chữ. One-Hot biến mỗi giá trị thành một cột 0/1: căn nhà thuộc nhóm nào thì cột nhóm đó bằng 1, các cột khác bằng 0. Mỗi cột này sẽ có một hệ số w riêng, nên đó là lý do mô hình có tới {{ meta.n_coef | vn_int }} hệ số.</p>
+        <div class="tbl-wrap">
+          <table class="tbl onehot">
+            <thead><tr><th>Căn nhà ở</th><th>Gò Vấp</th><th>Cầu Giấy</th><th>Quận 1</th></tr></thead>
+            <tbody>
+              <tr><td>Gò Vấp</td><td class="one">1</td><td>0</td><td>0</td></tr>
+              <tr><td>Cầu Giấy</td><td>0</td><td class="one">1</td><td>0</td></tr>
+              <tr><td>Quận 1</td><td>0</td><td>0</td><td class="one">1</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="small muted">Nhóm quá hiếm (dưới 5 căn) được gộp chung thành một cột "hiếm" để mô hình không học theo vài căn lẻ.</p>
+
+        <h3>4.6 Chuẩn hóa cột số</h3>
+        <p>Các cột số có thang đo rất khác nhau (diện tích hàng chục m², số tầng chỉ vài tầng). Chuẩn hóa z-score đưa mỗi cột về trung bình 0 và độ lệch chuẩn 1:</p>
+        <div class="formula">x′ = (x − μ) / σ<small>μ là trung bình, σ là độ lệch chuẩn của cột, tính trên tập train.</small></div>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Cột số</th><th class="num">Trung vị (để điền thiếu)</th><th class="num">Trung bình μ</th><th class="num">Độ lệch chuẩn σ</th></tr></thead>
+            <tbody>
+              {% for col in meta.numeric_cols %}
+              {% set s = meta.scaler[col] %}
+              <tr>
+                <td>{{ 'log(diện tích)' if col == 'log_area' else labels.get(col, col) }}</td>
+                <td class="num">{{ s.median | vn_num(2) }}</td>
+                <td class="num">{{ s.mean | vn_num(2) }}</td>
+                <td class="num">{{ s.std | vn_num(2) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p>Chuẩn hóa không làm đổi giá dự đoán, nó chỉ giúp các hệ số w của các cột số so sánh được với nhau.</p>
+
+        <h3>4.7 Chia train/test và gói thành Pipeline</h3>
+        <p>Dữ liệu chia 80% để huấn luyện và 20% để kiểm tra (<code>random_state = 42</code> để lần nào chạy cũng chia giống nhau). Mô hình không bao giờ được nhìn thấy tập test khi học, nên điểm trên tập test phản ánh khả năng dự đoán căn nhà mới. Toàn bộ bước chuẩn bị được gói vào <code>Pipeline</code>, nhờ đó trung vị, μ, σ chỉ tính từ tập train và web dùng lại đúng các bước này khi dự đoán.</p>
+<pre class="codeblock"><code>numeric = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+    ("scaler", StandardScaler()),
+])
+categorical = Pipeline([
+    ("imputer", SimpleImputer(strategy="constant", fill_value="Không rõ")),
+    ("onehot", OneHotEncoder(handle_unknown="infrequent_if_exist", min_frequency=5)),
+])
+pre = ColumnTransformer([("num", numeric, numeric_cols),
+                         ("cat", categorical, categorical_cols)])
+model = Pipeline([("pre", pre), ("model", LinearRegression())])</code></pre>
+      </section>
+
+      <!-- 5 -->
+      <section id="linear-regression">
+        <h2>5. Linear Regression</h2>
+        <div class="cards">
+          <div class="card-note">
+            <h3>Nguyên lý</h3>
+            <p>Coi giá nhà là tổng có trọng số của các thông tin đầu vào. Thông tin nào ảnh hưởng nhiều thì có hệ số w lớn. Hệ số được học sao cho giá dự đoán bám sát giá thật nhất có thể.</p>
+          </div>
+          <div class="card-note">
+            <h3>Ưu điểm</h3>
+            <ul>
+              <li>Đơn giản, huấn luyện rất nhanh (chưa tới 1 giây với dữ liệu này).</li>
+              <li>Dễ giải thích: mỗi hệ số có một ý nghĩa.</li>
+              <li>Gần như không có siêu tham số phải chỉnh.</li>
+              <li>Là mô hình nền tốt để so sánh với mô hình khác.</li>
+            </ul>
+          </div>
+          <div class="card-note warn">
+            <h3>Hạn chế</h3>
+            <ul>
+              <li>Chỉ biểu diễn được quan hệ dạng đường thẳng.</li>
+              <li>Nhạy với giá trị ngoại lai.</li>
+              <li>Hai cột giống nhau làm hệ số khó đọc.</li>
+              <li>Không tự bắt được các tác động chồng nhau, ví dụ cùng một diện tích nhưng ở trung tâm tăng giá nhiều hơn ở vùng ven.</li>
+            </ul>
+          </div>
+          <div class="card-note use">
+            <h3>Trong dự án này</h3>
+            <p>Dùng <code>LinearRegression</code> của Scikit-learn trong Pipeline. Đầu vào là {{ meta.numeric_cols | length + meta.categorical_cols | length }} cột ({{ meta.numeric_cols | length }} cột số, {{ meta.categorical_cols | length }} cột chữ), sau One-Hot thành {{ meta.n_coef | vn_int }} cột nên mô hình có {{ meta.n_coef | vn_int }} hệ số w cộng với w₀.</p>
+          </div>
+        </div>
+
+        <h3>Phương trình dự đoán</h3>
+        <div class="formula">ŷ = w₀ + w₁x₁ + w₂x₂ + … + wₙxₙ<small>ŷ là giá dự đoán, x là các thông tin của căn nhà, w là hệ số mô hình tự học, w₀ là số tự do.</small></div>
+
+        <h3>Hàm mất mát</h3>
+        <p>Để biết một bộ w tốt hay dở, lấy giá dự đoán so với giá thật của từng căn trong tập train, bình phương sai số rồi lấy trung bình (MSE):</p>
+        <div class="formula">J(w) = (1/n) · Σ (yᵢ − ŷᵢ)²<small>i chạy từ 1 đến n, n là số căn trong tập train. Sai số bị bình phương nên căn nào lệch nhiều bị phạt nặng. Học là tìm w làm cho J(w) nhỏ nhất.</small></div>
+
+        <h3>Tìm w bằng cách nào</h3>
+        <div class="formula">w = (XᵀX)⁻¹ Xᵀ y<small>Nghiệm bình phương tối thiểu. Scikit-learn tính thẳng ra, không phải lặp. Với các cột trùng thông tin (như các cột quận cộng lại luôn bằng 1), nó lấy nghiệm có độ lớn nhỏ nhất.</small></div>
+        <div class="formula">w ← w − α · ∇J(w)<small>Gradient Descent: cách khác, đi từng bước theo hướng làm J giảm, α là tốc độ học. Cho cùng đáp số nhưng phải chọn α và số vòng lặp. Bài này không dùng cách này.</small></div>
+
+        <h3>Tham số và siêu tham số</h3>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th></th><th>Là gì</th><th>Trong bài này</th></tr></thead>
+            <tbody>
+              <tr>
+                <td><b>Tham số</b></td>
+                <td>Giá trị mô hình tự học khi huấn luyện</td>
+                <td>w₀ và {{ meta.n_coef | vn_int }} hệ số w ({{ meta.n_num_coef }} hệ số cho cột số, {{ (meta.n_coef - meta.n_num_coef) | vn_int }} hệ số cho các cột chữ sau One-Hot)</td>
+              </tr>
+              <tr>
+                <td><b>Siêu tham số</b></td>
+                <td>Giá trị người làm đặt trước khi huấn luyện</td>
+                <td>Tỉ lệ test 20%, <code>random_state = 42</code>, điền thiếu bằng trung vị, <code>min_frequency = 5</code>, ngưỡng cắt ngoại lai 1% đến 99%</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {% if ex.breakdown %}
+        <h3>Ví dụ: tính giá một căn nhà</h3>
+        <p>Căn {{ ex["values"].area | vn_num(0) }} m², mặt tiền {{ ex["values"].frontage | vn_num(1) }} m, {{ ex["values"].floors | vn_num(0) }} tầng, {{ ex["values"].bedrooms | vn_num(0) }} phòng ngủ, {{ ex["values"].bathrooms | vn_num(0) }} phòng tắm ở {{ ex.place }} (các ô còn lại để trống). Mô hình cộng dồn các phần như sau:</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Phần</th><th class="num">Đóng góp (tỷ đồng)</th></tr></thead>
+            <tbody>
+              <tr><td>Giá nền của khu vực (w₀ + hệ số quận + hệ số phường)</td><td class="num">{{ ex.breakdown.base | vn_num(2) }}</td></tr>
+              {% for r in ex.breakdown.rows %}
+              <tr><td>{{ r.label }}</td><td class="num">{{ r.value | vn_signed }}</td></tr>
+              {% endfor %}
+              <tr class="total"><td>Giá dự đoán</td><td class="num">{{ ex.breakdown.total | vn_num(2) }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+        {% if ex.floors %}
+        <p>Lấy riêng số tầng: trung bình trong dữ liệu là {{ ex.floors.mean | vn_num(2) }} tầng, σ = {{ ex.floors.std | vn_num(2) }}. Căn mẫu có {{ ex.floors.value | vn_num(0) }} tầng nên giá trị sau chuẩn hóa là ({{ ex.floors.value | vn_num(0) }} − {{ ex.floors.mean | vn_num(2) }}) / {{ ex.floors.std | vn_num(2) }} = {{ ex.floors.z | vn_num(2) }}. Hệ số của số tầng là w = {{ ex.floors.w | vn_num(3) }}, vậy phần đóng góp là {{ ex.floors.z | vn_num(2) }} × {{ ex.floors.w | vn_num(3) }} ≈ {{ ex.floors.contrib | vn_num(2) }} tỷ.</p>
+        {% endif %}
+        <p class="small muted">"Giá nền" gộp w₀ với hệ số quận và phường vì các cột quận cộng lại luôn bằng 1, nên không tách riêng w₀ ra để đọc được. Các phần còn lại là chênh lệch so với một căn nhà trung bình trong dữ liệu. Trang kết quả của web hiển thị đúng bảng này cho mỗi căn bạn nhập.</p>
+        {% endif %}
+
+        <h3>Cách đọc các hệ số</h3>
+        <ul>
+          <li><b>Vị trí quan trọng nhất.</b> Chỉ cần tách thêm quận và phường là R² tăng từ {{ exps[0].R2 | vn_num(2) }} lên {{ exps[1].R2 | vn_num(2) }} (phần 8). Trong 15 hệ số có độ lớn cao nhất đều là cột quận hoặc phường, không có cột số nào.</li>
+          <li><b>Hai cột giống nhau phải đọc gộp.</b> Diện tích và log(diện tích) tương quan rất mạnh, nên hệ số của từng cột riêng lẻ không có ý nghĩa, chỉ phần tổng của hai cột mới có ý nghĩa. Số phòng ngủ và số phòng tắm cũng tương quan mạnh nên hệ số phòng ngủ gần bằng 0: phần ảnh hưởng đã được tính vào phòng tắm.</li>
+        </ul>
+      </section>
+
+      {% if meta.demo %}
+      <!-- 6 -->
+      <section id="thu-tay">
+        <h2>6. Thử tay: mô hình "học" nghĩa là gì?</h2>
+        <p>Mô hình thật có {{ meta.n_coef | vn_int }} hệ số nên không vẽ ra được. Để thấy việc học diễn ra thế nào, ví dụ dưới đây chỉ dùng một thông tin (diện tích) và {{ meta.demo.points | length }} căn ở {{ meta.demo.place }}. Khi đó mô hình chỉ còn hai hệ số w₀ và w₁, và ŷ = w₀ + w₁·x là một đường thẳng.</p>
+        <p>Mỗi chấm là một căn nhà. Đoạn gạch hồng là sai số giữa giá thật và giá đường thẳng dự đoán. Hãy kéo hai thanh trượt sao cho J(w) nhỏ nhất, rồi bấm "Đặt w tối ưu" để so với đáp án mà Linear Regression tính ra bằng công thức.</p>
+
+        <div class="demo">
+          <svg id="demo-chart" role="img" aria-label="Biểu đồ các căn nhà theo diện tích và giá, cùng đường thẳng dự đoán có thể kéo"></svg>
+
+          <div class="demo-controls">
+            <div>
+              <label for="demo-w1">w₁: giá tăng thêm mỗi m² (tỷ đồng) <output id="demo-w1-out" for="demo-w1"></output></label>
+              <input id="demo-w1" type="range" value="0.01">
+            </div>
+            <div>
+              <label for="demo-w0">w₀: giá khi diện tích bằng 0 (tỷ đồng) <output id="demo-w0-out" for="demo-w0"></output></label>
+              <input id="demo-w0" type="range" value="2">
+            </div>
+          </div>
+
+          <div class="demo-readout">
+            <div class="readout"><b id="demo-j">-</b><span>J(w) hiện tại</span></div>
+            <div class="readout"><b id="demo-jbest">-</b><span>J(w) nhỏ nhất có thể</span></div>
+            <div class="readout"><b id="demo-root">-</b><span>√J(w): sai số điển hình (tỷ)</span></div>
+            <div class="readout"><b id="demo-pred">-</b><span>Giá dự đoán cho căn 60 m² (tỷ)</span></div>
+          </div>
+
+          <div class="demo-actions">
+            <button type="button" class="primary" id="demo-best">Đặt w tối ưu</button>
+            <button type="button" id="demo-reset">Đặt lại</button>
+            <label><input type="checkbox" id="demo-show-res" checked> Hiện sai số</label>
+            <label><input type="checkbox" id="demo-show-opt"> Hiện đường tối ưu (vàng)</label>
+          </div>
+          <p class="demo-msg" id="demo-msg" aria-live="polite"></p>
+        </div>
+        <p>Với một thông tin, nghiệm tối ưu tính được bằng công thức w₁ = cov(x, y) / var(x) và w₀ = ȳ − w₁·x̄. Với {{ meta.n_coef | vn_int }} hệ số, scikit-learn giải cùng bài toán đó bằng đại số ma trận, nhưng ý tưởng vẫn là tìm đường (thực ra là mặt phẳng nhiều chiều) làm tổng sai số bình phương nhỏ nhất.</p>
+        <script type="application/json" id="demo-data">{{ meta.demo | tojson }}</script>
+      </section>
+      {% endif %}
+
+      <!-- 7 -->
+      <section id="danh-gia">
+        <h2>7. Đánh giá mô hình</h2>
+        <p>Bốn chỉ số được dùng, đều so giá dự đoán ŷ với giá thật y trên {{ meta.n_test | vn_int }} căn của tập test:</p>
+        <div class="formula">MAE = (1/n) · Σ |yᵢ − ŷᵢ|<small>Sai số tuyệt đối trung bình, tính bằng tỷ đồng. Dễ hiểu nhất: mô hình lệch trung bình bấy nhiêu tỷ.</small></div>
+        <div class="formula">MSE = (1/n) · Σ (yᵢ − ŷᵢ)²<small>Giống hàm mất mát J(w) nhưng tính trên tập test. Đơn vị là tỷ², phạt nặng các căn lệch nhiều.</small></div>
+        <div class="formula">RMSE = √MSE<small>Đưa MSE về lại đơn vị tỷ đồng để so với MAE.</small></div>
+        <div class="formula">R² = 1 − Σ (yᵢ − ŷᵢ)² / Σ (yᵢ − ȳ)²<small>Mô hình giải thích được bao nhiêu phần biến động của giá. R² = 1 là hoàn hảo, R² = 0 là chỉ tốt bằng cách luôn đoán giá trung bình.</small></div>
+
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Chỉ số</th><th class="num">Tập train</th><th class="num">Tập test</th><th class="num">Cross-validation 5 lần</th></tr></thead>
+            <tbody>
+              <tr><td>MAE (tỷ)</td><td class="num">{{ tr.MAE | vn_num(2) }}</td><td class="num">{{ te.MAE | vn_num(2) }}</td><td class="num">{{ cv.MAE[0] | vn_num(2) }} ± {{ cv.MAE[1] | vn_num(2) }}</td></tr>
+              <tr><td>MSE (tỷ²)</td><td class="num">{{ tr.MSE | vn_num(2) }}</td><td class="num">{{ te.MSE | vn_num(2) }}</td><td class="num">-</td></tr>
+              <tr><td>RMSE (tỷ)</td><td class="num">{{ tr.RMSE | vn_num(2) }}</td><td class="num">{{ te.RMSE | vn_num(2) }}</td><td class="num">{{ cv.RMSE[0] | vn_num(2) }} ± {{ cv.RMSE[1] | vn_num(2) }}</td></tr>
+              <tr><td>R²</td><td class="num">{{ tr.R2 | vn_num(2) }}</td><td class="num">{{ te.R2 | vn_num(2) }}</td><td class="num">{{ cv.R2[0] | vn_num(2) }} ± {{ cv.R2[1] | vn_num(2) }}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>Đọc kết quả</h3>
+        <ul>
+          <li><b>Mức chính xác:</b> mô hình lệch trung bình khoảng {{ te.MAE | vn_num(2) }} tỷ. Có {{ ei.within1 | vn_num(0) }}% số căn lệch không quá 1 tỷ và {{ ei.within2 | vn_num(0) }}% lệch không quá 2 tỷ. R² = {{ te.R2 | vn_num(2) }} nghĩa là mô hình giải thích được khoảng {{ (te.R2 * 100) | vn_num(0) }}% biến động của giá.</li>
+          <li><b>Có bị học vẹt không?</b> R² trên tập train là {{ tr.R2 | vn_num(2) }}, trên tập test là {{ te.R2 | vn_num(2) }}, chênh nhau khoảng {{ (tr.R2 - te.R2) | vn_num(2) }}. Hai số gần nhau nên mô hình không bị overfitting nặng.</li>
+          <li><b>Có ổn định không?</b> Cross-validation chia dữ liệu thành 5 phần, lần lượt lấy mỗi phần làm tập kiểm tra. R² trung bình là {{ cv.R2[0] | vn_num(2) }} với độ lệch {{ cv.R2[1] | vn_num(2) }}, tức điểm số gần như không đổi dù chia dữ liệu kiểu nào.</li>
+        </ul>
+      </section>
+
+      <!-- 8 -->
+      <section id="phuong-an">
+        <h2>8. Các phương án đã thử</h2>
+        <p>Để biết bước xử lý nào thực sự có ích, mỗi phương án dưới đây được huấn luyện lại và chấm trên cùng một tập test.</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead><tr><th>Phương án</th><th>R²</th><th class="num">Thay đổi R²</th><th class="num">MAE (tỷ)</th></tr></thead>
+            <tbody>
+              {% for e in exps %}
+              <tr class="{{ 'pick' if e.selected else '' }}">
+                <td>{{ e.name }}{% if e.selected %}<span class="tag">đang dùng</span>{% endif %}</td>
+                <td><span class="minibar"><i style="width: {{ '%.0f' | format(e.R2 * 100) }}%;"></i></span>{{ e.R2 | vn_num(3) }}</td>
+                <td class="num">{% if loop.first %}-{% else %}{{ (e.R2 - loop.previtem.R2) | vn_signed }}{% endif %}</td>
+                <td class="num">{{ e.MAE | vn_num(2) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if exps | length >= 5 %}
+        <ul>
+          <li><b>Tách quận và phường</b> là bước hiệu quả nhất (R² từ {{ exps[0].R2 | vn_num(2) }} lên {{ exps[1].R2 | vn_num(2) }}). Cùng một tỉnh nhưng quận trung tâm và vùng ven chênh giá rất lớn, nếu chỉ biết tên tỉnh thì mô hình không phân biệt được.</li>
+          <li><b>Thêm log(diện tích)</b> giúp R² tăng thêm từ {{ exps[1].R2 | vn_num(2) }} lên {{ exps[2].R2 | vn_num(2) }}, vì giá không tăng đều theo m².</li>
+          <li><b>Hướng nhà, hướng ban công</b> gần như không thay đổi kết quả ({{ exps[2].R2 | vn_num(3) }} và {{ exps[3].R2 | vn_num(3) }}). Đã giữ vì không làm mô hình tệ đi, nhưng hai cột này đóng góp rất ít.</li>
+          <li><b>Dự đoán log(giá)</b> cho R² thấp hơn ({{ exps[4].R2 | vn_num(3) }}), nên dự án giữ cách dự đoán trực tiếp giá.</li>
+        </ul>
+        {% endif %}
+      </section>
+
+      <!-- 9 -->
+      <section id="ket-qua">
+        <h2>9. Biểu đồ kết quả</h2>
+        <figure class="fig">
+          <img src="{{ url_for('static', filename='images/actual_vs_pred.png') }}" alt="Biểu đồ so sánh giá thực tế và giá dự đoán trên tập test" width="520">
+          <figcaption>Giá thực tế (trục ngang) so với giá dự đoán (trục dọc). Điểm càng gần đường đứt đỏ càng chính xác. Nhà trên {{ ei.high_cut }} tỷ ({{ ei.high.n | vn_int }} căn trong tập test) bị dự đoán thấp hơn thực tế trung bình {{ ei.high.bias | vn_num(2) }} tỷ, còn nhà dưới {{ ei.low_cut }} tỷ ({{ ei.low.n | vn_int }} căn) bị dự đoán cao hơn thực tế trung bình {{ (0 - ei.low.bias) | vn_num(2) }} tỷ. Mô hình có xu hướng kéo dự đoán về gần mức giá trung bình.</figcaption>
+        </figure>
+        <div class="fig-pair">
+          <figure class="fig">
+            <img src="{{ url_for('static', filename='images/residuals.png') }}" alt="Biểu đồ phân phối sai số trên tập test" width="420">
+            <figcaption>Phân phối sai số (giá thực tế trừ giá dự đoán). Sai số trung bình là {{ ei.mean_error | vn_num(2) }} tỷ, tức mô hình không lệch hẳn về một phía, nhưng còn một số căn lệch nhiều.</figcaption>
+          </figure>
+          <figure class="fig">
+            <img src="{{ url_for('static', filename='images/coefficients.png') }}" alt="15 hệ số có độ lớn cao nhất của mô hình" width="420">
+            <figcaption>15 hệ số có độ lớn cao nhất đều là cột quận hoặc phường. Các hệ số này không đọc riêng lẻ được vì phần giá nền đã chia giữa w₀ và các cột quận, chỉ có tổng mới mang ý nghĩa giá.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- 10 -->
+      <section id="han-che">
+        <h2>10. Hạn chế và hướng phát triển</h2>
+        <h3>Hạn chế</h3>
+        <ul>
+          <li>R² khoảng {{ te.R2 | vn_num(2) }} nên kết quả chỉ để tham khảo. Giá nhà còn phụ thuộc nhiều thứ dataset không có: vị trí chính xác trên đường, chất lượng xây dựng, tình trạng nhà, năm xây.</li>
+          <li>Dữ liệu sau khi cắt ngoại lai chỉ có nhà giá từ {{ data.price_cut[0] | vn_num(2) }} đến {{ data.price_cut[1] | vn_num(0) }} tỷ, nên không dùng để định giá nhà đắt hơn.</li>
+          <li>Linear Regression chỉ biểu diễn quan hệ tuyến tính nên khó bắt được các tác động chồng nhau giữa vị trí và diện tích.</li>
+          <li>Các cột hướng nhà, hướng ban công thiếu quá nhiều nên đóng góp rất ít.</li>
+        </ul>
+        <h3>Hướng phát triển</h3>
+        <ul>
+          <li>Thử Ridge hoặc Lasso: có thêm phạt cho hệ số lớn, phù hợp khi có hàng trăm cột One-Hot.</li>
+          <li>Thêm đặc trưng tương tác giữa vị trí và diện tích.</li>
+          <li>So sánh với các mô hình dựa trên cây như Random Forest hoặc Gradient Boosting, vì chúng tự bắt được quan hệ không tuyến tính.</li>
+          <li>Đưa web lên một máy chủ thật để người khác truy cập.</li>
+        </ul>
+      </section>
+
+      <p class="doc-foot">Mọi số liệu trên trang này đọc từ <code>models/meta.json</code>, được tạo khi chạy <code>python train_model.py</code>. Huấn luyện lại thì số liệu tự cập nhật.</p>
+    </article>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/demo.js') }}"></script>
+  <script>
+    // Mục lục: tô đậm mục đang đọc
+    (function () {
+      var links = Array.prototype.slice.call(document.querySelectorAll(".toc a"));
+      var map = {};
+      links.forEach(function (a) { map[a.getAttribute("href").slice(1)] = a; });
+      if (!("IntersectionObserver" in window)) return;
+      var io = new IntersectionObserver(function (entries) {
+        entries.forEach(function (en) {
+          if (en.isIntersecting) {
+            links.forEach(function (a) { a.classList.remove("on"); });
+            if (map[en.target.id]) map[en.target.id].classList.add("on");
+          }
+        });
+      }, { rootMargin: "-10% 0px -75% 0px" });
+      document.querySelectorAll(".doc-body section[id]").forEach(function (s) { io.observe(s); });
+    })();
+  </script>
+</body>
+</html>

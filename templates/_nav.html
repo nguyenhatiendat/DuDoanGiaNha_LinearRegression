@@ -1,0 +1,7 @@
+<nav class="topnav" aria-label="Điều hướng">
+  <a class="brand" href="{{ url_for('index') }}">Dự đoán giá nhà</a>
+  <span class="links">
+    <a href="{{ url_for('index') }}" {% if request.endpoint in ('index', 'predict') %}aria-current="page"{% endif %}>Dự đoán</a>
+    <a href="{{ url_for('explain_page') }}" {% if request.endpoint == 'explain_page' %}aria-current="page"{% endif %}>Giải thích mô hình</a>
+  </span>
+</nav>

@@ -13,6 +13,7 @@
 </head>
 <body>
   <header class="band band-result">
+    {% include "_nav.html" %}
     <div class="band-inner">
       <div class="band-copy">
         <p class="place">{{ place }}</p>
@@ -54,6 +55,35 @@
       Mô hình chỉ học từ nhà có giá {{ meta.price_min | vn_price }} đến {{ meta.price_max | vn_price }}, nên không phù hợp để định giá nhà đắt hơn mức này.
       {% endif %}
     </p>
+
+    {% if explain %}
+    <section class="panel explain">
+      <h2>Mô hình tính ra giá này thế nào?</h2>
+      <p class="hint">
+        Linear Regression tính giá bằng phương trình ŷ = w₀ + w₁x₁ + w₂x₂ + … + wₙxₙ, tức là cộng dồn các phần.
+        Bảng dưới cho thấy mỗi thông tin cộng thêm hoặc trừ bớt bao nhiêu so với một căn nhà trung bình trong dữ liệu.
+      </p>
+      <ul class="ex-list">
+        <li class="ex-base">
+          <span>Giá nền của khu vực <small>(căn nhà trung bình ở {{ place }})</small></span>
+          <b>{{ explain.base | vn_num }} tỷ</b>
+        </li>
+        {% for r in explain.rows %}
+        <li class="ex-row">
+          <span>{{ r.label }}</span>
+          <span class="ex-track" aria-hidden="true">
+            <span class="ex-bar {{ 'up' if r.value >= 0 else 'down' }}" style="width: {{ '%.1f' | format(r.bar) }}%;"></span>
+          </span>
+          <b class="{{ 'zero' if (r.value | vn_signed) == '0,00' else ('up' if r.value > 0 else 'down') }}">{{ r.value | vn_signed }}</b>
+        </li>
+        {% endfor %}
+        <li class="ex-total">
+          <span>Giá dự đoán</span>
+          <b>{{ explain.total | vn_num }} tỷ</b>
+        </li>
+      </ul>
+    </section>
+    {% endif %}
 
     <section class="panel summary">
       <h2>Thông tin đã nhập</h2>
