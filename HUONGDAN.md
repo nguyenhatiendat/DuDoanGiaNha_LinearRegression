@@ -4,8 +4,15 @@
 
 Mở terminal trong thư mục `HousePricePrediction` (thư mục có file `app.py`), gõ:
 
+Cài thư viện (chỉ cần làm một lần):
+
 ```
 python -m pip install -r requirements.txt
+```
+
+Chạy web:
+
+```
 python app.py
 ```
 
@@ -22,6 +29,10 @@ Lệnh này đọc `data/gia_nha.csv`, in ra MAE, MSE, RMSE, R² và tạo lại
 - 3 biểu đồ trong `static/images/`
 
 Chạy xong thì chạy lại `python app.py`.
+
+## Trang giải thích mô hình
+
+Mở `http://127.0.0.1:5000/giai-thich` (hoặc bấm "Giải thích mô hình" trên thanh đầu trang). Đọc trang này từ trên xuống là đủ để thuyết trình: dữ liệu, tiền xử lý, Linear Regression, chỉ số, kết quả.
 
 ## Xem phân tích dữ liệu
 
